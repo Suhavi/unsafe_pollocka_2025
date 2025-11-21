@@ -1,107 +1,160 @@
+"""
+Utility for discovering and extracting archive files inside a raw data tree.
+
+* Finds “.zip” and “.7z” archives (ignoring hidden files/folders).
+* Recreates the original directory hierarchy under a user‑specified *unzip_dir*.
+* If several archives would extract to the same parent directory, a sub‑folder
+  named after the archive is created to avoid collisions.
+    
+    import unsafe.unzip as ununzip
+
+    ununzip.unzip_raw(
+        raw_root="data/raw",
+        unzip_root="data/unzipped"
+    )
+"""
+
 # Packages
+from __future__ import annotations
+
+import os
 from os.path import join
 from pathlib import Path
-import glob
 from zipfile import ZipFile
 import zipfile_deflate64
+import py7zr
 from collections import Counter
-from unsafe.files import *
-from unsafe.const import *
+import logging
+import sys
+from typing import Union, List
 
 
-# This function searches through our
-# raw directory tree and
-# returns a list of all the paths
-# to .zip directories
-def zipped_downloads(fr):
-    zip_list = []
-    for path in Path(fr).rglob("*.zip"):
-        # Avoid hidden files and files in directories
-        if path.name[0] != ".":
-            # Add this path to our list of zip directories
-            zip_list.append(str(path))
+# ----------------------------------------------------------------------
+# Logging
+# ----------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    stream=sys.stdout,
+)
+log = logging.getLogger(__name__)
+
+# ----------------------------------------------------------------------
+# Constants
+# ----------------------------------------------------------------------
+ZIP_SUFFIXES = (".zip", ".7z")   # <- add more extensions here if needed
+
+# ----------------------------------------------------------------------
+# Helper functions
+# ----------------------------------------------------------------------
+def _is_visible(p: Path) -> bool:
+    """Return ``True`` if the file/path is not hidden (does not start with a dot)."""
+    return not any(part.startswith(".") for part in p.parts)
+
+def _to_path(p: Union[str, Path]) -> Path:
+    """Coerce *p* to a pathlib.Path (handles str, bytes, os.PathLike)."""
+    if isinstance(p, Path):
+        return p
+    # ``os.PathLike`` covers PurePath, pathlib.PathLike objects, etc.
+    if isinstance(p, (str, bytes, os.PathLike)):
+        return Path(p).expanduser().resolve()
+    raise TypeError(f"Expected str | pathlib.Path, got {type(p)!r}")
+
+def _extract_archive(archive_path: Path, dest_dir: Path) -> None:
+    """
+    Dispatch extraction based on file suffix.
+
+    Supports:
+        *.zip* – via :class:`zipfile.ZipFile`
+        *.7z*  – via :mod:`py7zr`
+
+    Raises
+    ------
+    ValueError
+        If the suffix is not recognised.
+    """
+    suffix = archive_path.suffix.lower()
+    if suffix == ".zip":
+        with ZipFile(archive_path, "r") as zip_ref:
+            zip_ref.extractall(dest_dir)
+    elif suffix == ".7z":
+        with py7zr.SevenZipFile(archive_path, mode="r") as sz:
+            sz.extractall(dest_dir)
+    else:
+        raise ValueError(f"Unsupported archive type: {suffix}")
+
+# ----------------------------------------------------------------------
+# Main functionality
+# ----------------------------------------------------------------------
+def zipped_downloads(fr: Union[str, Path]) -> List[Path]:
+    """Return a list of visible *.zip* and *.7z* files under *fr*."""
+    fr = _to_path(fr)
+    zip_list: List[Path] = []
+    for suffix in ZIP_SUFFIXES:
+        for path in fr.rglob(f"*{suffix}"):
+            if _is_visible(path):
+                zip_list.append(path)
     return zip_list
 
 
-# This function gives us all the directory
-# paths for unzipped files
-def unzipped_dirs(fr, unzip_dir):
-    # For each *.zip directory
-    # we want to get the path relative
-    # to raw that the .zip is in
-    # We can use this relative path
-    # and append it to raw/unzipped/
-    # Make this directory
-    # and append to a list of output
-    # files
-    unzip_list = []
-    for path in Path(fr).rglob("*.zip"):
-        # Avoid hidden files and files in directories
-        if path.name[0] != ".":
-            # Get root for the directory this .zip file is in
-            zip_root = path.relative_to(fr).parents[0]
+def unzipped_dirs(fr: Union[str, Path], unzip_dir: Union[str, Path]) -> List[Path]:
+    """Create the destination directories that mirror the archive layout."""
+    fr = _to_path(fr)
+    unzip_dir = _to_path(unzip_dir)
 
-            # Get path to interim/zip_root
-            zip_to_path = join(unzip_dir, zip_root)
-
-            # Make directory, including parents
-            # No need to check if directory exists bc
-            # it is only created when this script is run
-            Path(zip_to_path).mkdir(parents=True, exist_ok=True)
-
-            # Append
-            unzip_list.append(zip_to_path)
+    unzip_list: List[Path] = []
+    for suffix in ZIP_SUFFIXES:
+        for path in fr.rglob(f"*{suffix}"):
+            if _is_visible(path):
+                zip_root = path.relative_to(fr).parent
+                dest = unzip_dir / zip_root
+                dest.mkdir(parents=True, exist_ok=True)
+                unzip_list.append(dest)
     return unzip_list
 
 
-# This function gives us our
-# structured directory path -
-# a unique set of these
-def unzipped_downloads():
-    unzip_list = unzipped_dirs()
-    # We need the unique set for the Snakemake
-    return list(set(unzip_list))
+def unzip_raw(fr: Union[str, Path], unzip_dir: Union[str, Path]) -> None:
+    """
+    Extract every archive found under *fr* into a directory tree that
+    mirrors the archive’s position inside the overall raw tree.
 
+    Parameters
+    ----------
+    fr :
+        The directory that contains the archives (any sub‑directory of the
+        overall ``data/raw`` tree).
+    unzip_dir :
+        The sibling ``.../unzipped`` directory.  The function determines the
+        proper destination for each archive by looking at the path **relative to
+        ``unzip_dir.parent``** (the common ``data/raw`` root).
 
-# This function calls the other helpfer functions to unzip
-# all of the external and raw data in our
-# directory. In a many county setting,
-# it probably would make sense for this
-# to work based on state, county, and US
-# arguments to facilitate distributed processing
-def unzip_raw(fr, unzip_dir):
-    # This gives us a list
-    # of files to unzip, and the directories
-    # to unzip them to
-    to_unzip = zipped_downloads(fr)
-    unzip_dirs = unzipped_dirs(fr, unzip_dir)
+    Example
+    -------
+    >>> raw_root   = Path("data/raw/external/hazard/gc/response")
+    >>> unzip_root = Path("data/raw/unzipped")
+    >>> unzip_raw(raw_root, unzip_root)
+    # Files from all archives end up in:
+    # data/raw/unzipped/external/hazard/gc/response/
+    """
+    fr = _to_path(fr)
+    unzip_dir = _to_path(unzip_dir)
 
-    # We're going to loop through the files we need to unzip
-    # and extract them into the appropriate directories
-    # One thing that will help the directory structure stay organized
-    # is to keep track of what the destination parent directory is
-    # If the parent directory appears multiple times in unzip_dirs
-    # we should also use the name of the file (excluding extension)
-    # as a subdirectory
-    # We can use the Counter() class from collections for this...
-    count = Counter(unzip_dirs)
-    need_subdir = [k for k, v in count.items() if v > 1]
+    # Locate all archive files (order is deterministic: rglob walks alphabetically)
+    archives = zipped_downloads(fr)
 
-    for i, filepath in enumerate(to_unzip):
-        path = Path(filepath)
+    # Raw root
+    raw_base = unzip_dir.parent
 
-        # If unzip_dirs[i] is in need_subdir
-        # we are going to add a subdirectory
-        # from str.split('/')[-1][:-4]
-        # This gives us cdc from cdc.zip, for example
+    for archive_path in archives:
+        # ``archive_path.parent`` is the folder that holds the archive.
+        # ``relative_to(raw_base)`` strips the common ``data/raw`` prefix,
+        # leaving e.g. ``external/hazard/gc/response``.
+        rel_parent = archive_path.parent.relative_to(raw_base)
 
-        out_filedir = unzip_dirs[i]
-        if unzip_dirs[i] in need_subdir:
-            subdir = filepath.split("/")[-1][:-4]
-            out_filedir = join(out_filedir, subdir)
+        # Destination mirrors that relative path under ``unzip_dir``.
+        dest_dir = unzip_dir / rel_parent
+        dest_dir.mkdir(parents=True, exist_ok=True)
 
-        with ZipFile(path, "r") as zip_ref:
-            zip_ref.extractall(out_filedir)
-
-        # TODO helpful log message
-        print("Unzipped: " + str(path.name).split(".")[0])
+        log.info("Extracting %s → %s", archive_path.name, dest_dir)
+        _extract_archive(archive_path, dest_dir)
+        log.info("Finished: %s", archive_path.stem)
