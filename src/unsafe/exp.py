@@ -12,6 +12,7 @@ import rasterio.mask
 from pyproj import CRS
 import os
 from os.path import join
+from pathlib import Path
 import warnings
 
 os.environ["USE_PYGEOS"] = "0"
@@ -131,7 +132,7 @@ def clip_ref_files(clip_gdf, clip_str, fips_args, ref_downloads,
         ref_filename = filled_url.split('/')[-1][:-4] + '.shp'
         ref_name_out = str_tokens[-1]
         ref_filep = '/'.join([ref_dir_uz , fips_args[str_tokens[0]][0], 
-                              ref_name_out, ref_filename])
+                              ref_filename])
       
         print("Found shapefile: " + ref_name_out)
 
@@ -311,43 +312,44 @@ def get_ref_ids(exp_gdf, clip_str, ref_id_names_dict, ref_dir_i, exp_dir_i):
             ref_filep = join(ref_dir_i, clip_str, ref_name + ".gpkg")
 
             # Load in the ref file
-            ref_geo = gpd.read_file(ref_filep)
-            print("Read ref file: " + ref_name)
+            if Path(ref_filep).is_file():
+                ref_geo = gpd.read_file(ref_filep)
+                print("Read ref file: " + ref_name)
 
-            # Limit the geodataframe to our ref id and 'geometry' column
-            keep_col = [ref_id, "geometry"]
-            ref_geo_sub = ref_geo[keep_col]
+                # Limit the geodataframe to our ref id and 'geometry' column
+                keep_col = [ref_id, "geometry"]
+                ref_geo_sub = ref_geo[keep_col]
 
-            # Limit the exp to our geometry column
-            keep_col_nsi = ["geometry"]
-            exp_sub = exp_gdf[keep_col_nsi]
+                # Limit the exp to our geometry column
+                keep_col_nsi = ["geometry"]
+                exp_sub = exp_gdf[keep_col_nsi]
 
-            # For now, do centroid of structures if not already
-            # the geometry type
-            if any(exp_gdf.geometry.type == 'Polygon'):
-                # Make sure we are in a projected geometry
-                # when getting the centroid
-                exp_gdf['geometry'] = exp_gdf['geometry'].to_crs(epsg='5070')
-                exp_gdf['geometry'] = exp_gdf['geometry'].centroid
+                # For now, do centroid of structures if not already
+                # the geometry type
+                if any(exp_gdf.geometry.type == 'Polygon'):
+                    # Make sure we are in a projected geometry
+                    # when getting the centroid
+                    exp_gdf['geometry'] = exp_gdf['geometry'].to_crs(epsg='5070')
+                    exp_gdf['geometry'] = exp_gdf['geometry'].centroid
 
-            # Reproj nsi_sub to the reference crs
-            exp_reproj = exp_sub.to_crs(ref_geo.crs)
-            
-            # Do a spatial join
-            exp_ref = gpd.sjoin(exp_reproj, ref_geo_sub, predicate="intersects")
-            print("Spatial join with structures")
+                # Reproj nsi_sub to the reference crs
+                exp_reproj = exp_sub.to_crs(ref_geo.crs)
+                
+                # Do a spatial join
+                exp_ref = gpd.sjoin(exp_reproj, ref_geo_sub, predicate="intersects")
+                print("Spatial join with structures")
 
-            # Set index to fd_id and just keep the ref_id
-            # Rename that column to our ref_name + '_id'
-            # Append this to our ref_df_list
-            exp_ref_f = exp_ref[[ref_id]]
-            exp_ref_f = exp_ref_f.rename(columns={ref_id: ref_name + "_id"})
-            # Drop duplicate bfid if any
-            exp_ref_f = exp_ref_f[~exp_ref_f.index.duplicated(keep='first')]
-            ref_df_list.append(exp_ref_f)
+                # Set index to fd_id and just keep the ref_id
+                # Rename that column to our ref_name + '_id'
+                # Append this to our ref_df_list
+                exp_ref_f = exp_ref[[ref_id]]
+                exp_ref_f = exp_ref_f.rename(columns={ref_id: ref_name + "_id"})
+                # Drop duplicate bfid if any
+                exp_ref_f = exp_ref_f[~exp_ref_f.index.duplicated(keep='first')]
+                ref_df_list.append(exp_ref_f)
 
-            # Helpful message
-            print("Linked reference to structures: " + ref_name + "_id")
+                # Helpful message
+                print("Linked reference to structures: " + ref_name + "_id")
 
     # Can concat and write
     return pd.concat(ref_df_list, axis=1).reset_index()
