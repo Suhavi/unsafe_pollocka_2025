@@ -494,7 +494,7 @@ def process_hazus(vuln_dir_uz, vuln_dir_i, unif_unc=0.3):
     print("HAZUS DDFs processed")
 
 
-def est_naccs_loss(ddf_types, depths, ffes, ddfs, MAX_DICT, base_adj):
+def est_naccs_loss(ddf_types, depths, ffes, ddfs, MAX_DICT, base_adj=False):
     # We are going to use a random number generator
     rng = np.random.default_rng()
 
@@ -833,7 +833,7 @@ def get_losses(depths_df, ffes, ddf, ddf_types, s_values, vuln_dir_i, base_adj):
     return loss_df
 
 
-def get_eal(loss_df, rp_list):
+def get_eal(loss_df, rp_list, loss_str=''):
     """
     We use trapezoidal approximation to get the expected annual loss
     from a dataframe of losses based on design events. rp_list
@@ -842,9 +842,10 @@ def get_eal(loss_df, rp_list):
     loss_df: DataFrame, losses in different design events
     rp_list: list of str, sorted list of the return period from
     most to least frequent
+    loss_str: str that identifies dam col name, defaults to empty
     """
     p_rp_list = [round(1 / int(x), 4) for x in rp_list]
-    loss_list = ["loss_" + str(x) for x in rp_list]
+    loss_list = [loss_str + '_' + str(x) for x in rp_list]
 
     # Need eal series with the same index as the loss_df
     eal = pd.Series(index=loss_df.index).fillna(0)

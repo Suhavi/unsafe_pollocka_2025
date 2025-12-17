@@ -197,9 +197,11 @@ def get_loss_ensemble(
     print(f"Generating ensemble with {n_sow} states of the world...")
     print(f"Uncertain characteristics: {struct_list}")
 
-    # Drop any depths as required
-    # If depth_min is 0, this drops any null depths
-    depths_df = depths_df[depths_df.sum(axis=1) > depth_min]
+    # Drop any rows where all depths fall short of minimum
+    depths_df = depths_df[(depths_df >= depth_min).any(axis=1)]
+
+    # Replace all remaining values under depth_min with na
+    depths_df[depths_df < depth_min] = np.nan
 
     # Convert depths to ft
     depths_df = depths_df*unconst.MTR_TO_FT
@@ -441,7 +443,7 @@ def get_loss_ensemble(
     # To prepare this, we need to do some pre-processing on the losses &
     # eals dicts, adding the ddf name before the columns in the associated
     # dataframe.
-    final_losses = pd.DataFrame(index=depths_df.index)
+    final_losses = pd.DataFrame(index=ens_df.index)
     for ddf, df in losses.items():
         df.columns = [ddf + "_" + x for x in df.columns]
         final_losses = pd.concat([final_losses, df], axis=1)
