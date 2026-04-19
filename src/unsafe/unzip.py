@@ -1,9 +1,10 @@
 # Packages
+import os
 from os.path import join
 from pathlib import Path
 import glob
-from zipfile import ZipFile
-import zipfile_deflate64
+from zipfile import ZipFile, BadZipFile, is_zipfile
+# import zipfile_deflate64
 from collections import Counter
 from unsafe.files import *
 from unsafe.const import *
@@ -99,6 +100,14 @@ def unzip_raw(fr, unzip_dir):
         if unzip_dirs[i] in need_subdir:
             subdir = filepath.split("/")[-1][:-4]
             out_filedir = join(out_filedir, subdir)
+
+        # Skip archives that have already been extracted.
+        if os.path.isdir(out_filedir) and os.listdir(out_filedir):
+            print("Skipped existing unzip: " + str(path.name).split(".")[0])
+            continue
+
+        if not is_zipfile(path):
+            raise BadZipFile(f"Invalid zip archive: {path}")
 
         with ZipFile(path, "r") as zip_ref:
             zip_ref.extractall(out_filedir)

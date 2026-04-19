@@ -2,6 +2,7 @@
 import os
 from os.path import join
 from pathlib import Path
+import time
 import yaml
 from yaml.loader import SafeLoader
 import requests
@@ -83,11 +84,31 @@ def process_file(file):
     return str_tokens, endpoint
 
 # The download_url helper function
-def download_url(url, save_path, chunk_size=128):
-    r = requests.get(url, stream=True)
-    with open(save_path, "wb") as fd:
-        for chunk in r.iter_content(chunk_size=chunk_size):
-            fd.write(chunk)
+def download_url(url, save_path, chunk_size=128, max_retries=3, timeout=60):
+    # Some data portals and web archive mirrors incorrectly advertise
+    # gzip encoding for already-compressed files like zip archives.
+    # Requesting identity encoding avoids urllib3 decompression errors
+    # while we stream the raw bytes to disk.
+    headers = {"Accept-Encoding": "identity"}
+    temp_path = save_path + ".part"
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            with requests.get(url, stream=True, headers=headers, timeout=timeout) as r:
+                r.raise_for_status()
+                with open(temp_path, "wb") as fd:
+                    for chunk in r.iter_content(chunk_size=chunk_size):
+                        if chunk:
+                            fd.write(chunk)
+            os.replace(temp_path, save_path)
+            return
+        except requests.exceptions.RequestException:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            if attempt == max_retries:
+                raise
+            print(f"Retrying download ({attempt}/{max_retries}) for: {url}")
+            time.sleep(attempt)
 
 
 # The download_api helper function
@@ -109,7 +130,7 @@ def download_api(url, save_path):
 # 2) get the out filepath
 # 3) download the data
 # 4) write it in the out_filepath
-def download_raw(files, wcard_dict, fr, api_ext):
+def download_raw(files, wcard_dict, fr, api_ext, overwrite=False):
     for file in files.itertuples():
         # Get the str_tokens and endpoint from the dataframe row
         str_tokens, endpoint = process_file(file)
@@ -122,6 +143,20 @@ def download_raw(files, wcard_dict, fr, api_ext):
 
         # Make sure we can write out data to this filepath
         unfile.prepare_saving(out_filepath)
+
+        # Clean up any interrupted partial download before deciding what to do.
+        part_filepath = out_filepath + ".part"
+        if os.path.exists(part_filepath):
+            os.remove(part_filepath)
+
+        # Treat empty files as failed downloads and fetch them again.
+        if os.path.exists(out_filepath) and os.path.getsize(out_filepath) == 0:
+            os.remove(out_filepath)
+
+        # Skip downloads that are already present unless overwrite is requested.
+        if (not overwrite) and os.path.exists(out_filepath):
+            print("Skipped existing file: " + str(out_filepath))
+            continue
 
         # Download data with api or url call
         if str_tokens[1] == "api":

@@ -1,5 +1,6 @@
 import json
 import glob
+from pathlib import Path
 import geopandas as gpd
 import pandas as pd
 import numpy as np
@@ -132,6 +133,15 @@ def clip_ref_files(clip_gdf, clip_str, fips_args, ref_downloads,
         ref_name_out = str_tokens[-1]
         ref_filep = '/'.join([ref_dir_uz , fips_args[str_tokens[0]][0], 
                               ref_name_out, ref_filename])
+
+        # Some zip archives unpack directly into the expected directory,
+        # while others add an extra top-level folder before the shapefile.
+        # Fall back to a recursive search so both layouts are supported.
+        if not Path(ref_filep).exists():
+            ref_root = Path(ref_dir_uz) / fips_args[str_tokens[0]][0] / ref_name_out
+            matches = sorted(ref_root.rglob(ref_filename))
+            if matches:
+                ref_filep = str(matches[0])
       
         print("Found shapefile: " + ref_name_out)
 
